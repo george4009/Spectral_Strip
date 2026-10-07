@@ -152,29 +152,5 @@ void runAuditTests()
         check(error<1e-10 && power(heldZero)>.1,"Smear automation preserves an already captured Freeze");
     }
     check(!checkStereoLeak,"Smear does not leak into a silent stereo channel");
-    // A frozen harmonic tone should not acquire drifting, independent bins.
-    for(int rate : {44100,48000,96000})for(int choice : {0,1,2,3,4})
-    {
-        if(rate!=48000 && choice!=2)continue;
-        auto e=std::make_unique<SpectralEngine>();e->prepare(rate,choice);
-        SpectralEngine::Settings s;s.chain={0x11};s.bandFilter=false;
-        double energy=0;std::array<std::complex<double>,4> partials {};int count=0;
-        double minWindow=1e9,maxWindow=0,window=0;
-        for(int i=0;i<rate*4;++i)
-        {
-            float x=0;for(int h=1;h<=4;++h)x+=.12f/h*std::sin(juce::MathConstants<double>::twoPi*220*h*i/rate+.31*h);
-            s.freeze=i>=rate;float in[2]{i<rate*5/4 ? x : 0,0},wet[2]{},dry[2]{};e->process(in,wet,dry,1,s);
-            if(i>=rate*2)
-            {
-                energy+=wet[0]*wet[0];window+=wet[0]*wet[0];++count;
-                for(int h=1;h<=4;++h)partials[static_cast<size_t>(h-1)]+=static_cast<double>(wet[0])*std::polar(1.0,-juce::MathConstants<double>::twoPi*220*h*i/rate);
-                if(count%(rate/20)==0){minWindow=std::min(minWindow,window);maxWindow=std::max(maxWindow,window);window=0;}
-            }
-        }
-        double tonal=0;for(auto a:partials)tonal+=2*std::norm(a)/count;
-        const double purity=tonal/std::max(energy,1e-20),variation=(maxWindow-minWindow)/std::max(maxWindow,1e-20);
-        std::cout<<"Freeze harmonic rate "<<rate<<" FFT "<<e->getSize()<<" pitch purity "<<purity<<" level variation "<<variation<<" energy "<<energy/count<<'\n';
-        check(purity>.9 && variation<.15,"Freeze preserves harmonic tone without strong artificial beating");
-    }
     if(failures)throw std::runtime_error("General audit regressions failed");
 }

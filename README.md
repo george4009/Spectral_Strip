@@ -1,6 +1,6 @@
 # Spectral Strip — JUCE / Xcode
 
-Versione 0.7.4 di un multieffetto spettrale per macOS. Strip riordinabile con copie di
+Versione 0.7.3 di un multieffetto spettrale per macOS. Strip riordinabile con copie di
 **Freeze/Smear, Gate, Spectral Delay, Blur, Tremolo e Shimmer Reverb**, applicate alla banda LOW–HIGH.
 
 ## Aprire e compilare

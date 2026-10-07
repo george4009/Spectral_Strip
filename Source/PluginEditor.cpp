@@ -196,7 +196,7 @@ void SpectralStripEditor::paint(juce::Graphics& g)
     g.setColour(panel); g.fillRoundedRectangle(juce::Rectangle<float>(24,652,992,120),12);
     g.setColour(muted); g.setFont(11.0f);
     g.drawText("FILTER / FX BAND",40,665,135,22,juce::Justification::centredLeft);
-    g.drawText("FFT " + juce::String(owner.activeFFTSize.load()) + " / OVERLAP 4x   |   Latency: " + juce::String(1000.0 * owner.getLatencySamples() / std::max(1.0, owner.getSampleRate()), 1) + " ms   |   v0.7.4", 28, 775, 955, 20, juce::Justification::centredRight);
+    g.drawText("FFT " + juce::String(owner.activeFFTSize.load()) + " / OVERLAP 4x   |   Latency: " + juce::String(1000.0 * owner.getLatencySamples() / std::max(1.0, owner.getSampleRate()), 1) + " ms   |   v0.7.3", 28, 775, 955, 20, juce::Justification::centredRight);
 }
 void SpectralStripEditor::resized()
 {

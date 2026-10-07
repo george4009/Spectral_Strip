@@ -86,7 +86,7 @@ public:
             {
                 auto& module=c.modules[static_cast<size_t>(i)];
                 module.previousPhase.fill(0); module.heldPhase.fill(0); module.heldStep.fill(0);
-                module.smearPhase.fill(0);module.smearStep.fill(0);module.previousMagnitude.fill(0);module.captureStep.fill(0);
+                module.smearPhase.fill(0);module.smearStep.fill(0);module.previousMagnitude.fill(0);
                 module.heldMagnitude.fill(0); module.smoothedMagnitude.fill(0); module.gateGain.fill(0);
                 module.reverb.reset();module.bridgeInput.fill(0);module.bridgeOutput.fill(0);module.bridgeDry.fill(0);module.bridgePosition=0;
                 module.blurPhase.fill(0); module.blurInitialised=false;
@@ -129,7 +129,7 @@ private:
     struct ModuleState
     {
         std::array<float, maxBins> previousPhase {}, heldPhase {}, heldStep {}, heldMagnitude {}, smoothedMagnitude {}, gateGain {};
-        std::array<float,maxBins> smearPhase {},smearStep {},previousMagnitude {},captureStep {};
+        std::array<float,maxBins> smearPhase {},smearStep {},previousMagnitude {};
         ShimmerReverb reverb;
         std::array<float,maxSize> bridgeInput {},bridgeOutput {},bridgeDry {};
         int bridgePosition=0;
@@ -221,27 +221,6 @@ private:
             value+=module.blurBlend*module.blurAmount*mask*(std::polar(magnitude,phase)-value);
         }
     }
-    void lockFrozenPartials(ModuleState& module)
-    {
-        // All bins belonging to a captured partial must keep their original
-        // relative phase. Independent frequency estimates otherwise make a
-        // single partial spread and beat against itself during the hold.
-        std::array<int,maxBins> peaks {};int count=0;
-        float maximum=0;for(int k=1;k<bins-1;++k)maximum=std::max(maximum,module.heldMagnitude[static_cast<size_t>(k)]);
-        if(maximum<1e-8f)return;
-        for(int k=1;k<bins-1;++k)
-        {
-            const auto b=static_cast<size_t>(k);const float m=module.heldMagnitude[b];
-            if(m>maximum*.001f && m>=module.heldMagnitude[b-1] && m>module.heldMagnitude[b+1])peaks[static_cast<size_t>(count++)]=k;
-        }
-        if(count==0)return;
-        int region=0;
-        for(int k=1;k<bins-1;++k)
-        {
-            while(region+1<count && 2*k>peaks[static_cast<size_t>(region)]+peaks[static_cast<size_t>(region+1)])++region;
-            module.heldStep[static_cast<size_t>(k)]=module.heldStep[static_cast<size_t>(peaks[static_cast<size_t>(region)])];
-        }
-    }
     void applyTremolo(Channel& c,ModuleState& module,const ModuleSettings& params,const Settings& settings,float transition)
     {
         module.tremoloDepth+=transition*((params.tremolo ? params.tremoloDepth : 0.0f)-module.tremoloDepth);
@@ -330,7 +309,6 @@ private:
         fft.performRealOnlyForwardTransform(c.fftData.data(), true);
         const float transition=1.0f-std::exp(-static_cast<float>(hop/(sr*.035)));
         const float smearTracking=1-std::exp(-static_cast<float>(hop/(sr*.05)));
-        const float captureTracking=1-std::exp(-static_cast<float>(hop/(sr*.020)));
         const auto follow=[this](float ms) { return 1.0f-std::exp(-static_cast<float>(hop/(sr*std::max(.1f,ms)*.001))); };
         std::array<float,maxModules> smoothing {},attack {},release {};
         std::array<bool,maxModules> hold {};
@@ -403,20 +381,12 @@ private:
                     }
                     else
                         module.smearPhase[bin]=wrapped(module.smearPhase[bin]+module.smearStep[bin]);
-                    // A short running frequency estimate rejects capture-frame
-                    // phase jitter while keeping the current magnitudes/phases.
-                    if(magnitude>1e-8f && module.previousMagnitude[bin]>1e-8f)
-                    {
-                        const float measured=expected+wrapped(inputPhase-module.previousPhase[bin]-expected);
-                        module.captureStep[bin]+=captureTracking*wrapped(measured-module.captureStep[bin]);
-                    }
-                    else module.captureStep[bin]=expected;
                     module.previousMagnitude[bin]=magnitude;
                     if (hold[static_cast<size_t>(slot)] && !module.frozen)
                     {
                         module.heldMagnitude[static_cast<size_t>(k)] = module.smoothedMagnitude[static_cast<size_t>(k)];
                         module.heldPhase[static_cast<size_t>(k)] = smoothing[static_cast<size_t>(slot)]>0 ? module.smearPhase[bin] : inputPhase;
-                        module.heldStep[static_cast<size_t>(k)] = smoothing[static_cast<size_t>(slot)]>0 ? module.smearStep[bin] : module.captureStep[bin];
+                        module.heldStep[static_cast<size_t>(k)] = smoothing[static_cast<size_t>(slot)]>0 ? module.smearStep[bin] : expected + wrapped(inputPhase - module.previousPhase[bin] - expected);
                     }
                     else
                     {
@@ -473,7 +443,7 @@ private:
                 }
                 if(!originalOrder) value=before+mask*(value-before);
             }
-            if(type==1 && hold[static_cast<size_t>(slot)] && !module.frozen)lockFrozenPartials(module);
+
         }
         for(int k=0;k<bins;++k)
         {

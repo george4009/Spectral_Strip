@@ -1,6 +1,8 @@
 #include "../Source/PluginProcessor.h"
 #include <stdexcept>
 #include <iostream>
+#include <thread>
+#include <atomic>
 class TestTransport : public juce::AudioPlayHead
 {
 public:
@@ -16,12 +18,37 @@ void runProcessorTests()
     auto chainRecall=std::make_unique<SpectralStripProcessor>();
     chainRecall->setStateInformation(chainState.getData(),static_cast<int>(chainState.getSize()));
     if(chainRecall->getChain()!=SpectralStripProcessor::Chain{0x11,0x33}) throw std::runtime_error("Module chain recall failed");
+    const auto automatable=[&](SpectralStripProcessor& plugin,const juce::String& id)
+    { auto* parameter=plugin.state.getParameter(id); if(parameter==nullptr) throw std::runtime_error("Missing automation parameter"); return parameter->isAutomatable(); };
+    if(!automatable(*processor,"smear") || automatable(*processor,"threshold") || !automatable(*processor,"delayMs") || !automatable(*processor,"low") || !automatable(*processor,"fftSize")
+       || automatable(*processor,SpectralStripProcessor::moduleParamID(0,"blurAmount")) || automatable(*processor,SpectralStripProcessor::moduleParamID(0,"gate")))
+        throw std::runtime_error("Automation visibility does not follow the modules in the strip");
+    if(!automatable(*chainRecall,"smear") || automatable(*chainRecall,"threshold"))
+        throw std::runtime_error("Recalled chain did not update automation visibility");
+    if(automatable(*processor,SpectralStripProcessor::moduleParamID(3,"blurAmount")))
+        throw std::runtime_error("An unused module is exposed to automation");
+    if(!processor->addInstance(4)) throw std::runtime_error("Adding a module failed");
+    const int added=SpectralEngine::entrySlot(processor->getChain()[2]);
+    if(!automatable(*processor,SpectralStripProcessor::moduleParamID(added,"blurAmount")))
+        throw std::runtime_error("Adding a module did not expose its parameters");
+    processor->setChain({});
+    if(automatable(*processor,"smear") || !automatable(*processor,"mix"))
+        throw std::runtime_error("Removing every module left its parameters automatable");
+    processor->setChain({0x11,0x33});
+    auto legacyTree=processor->state.copyState();
+    legacyTree.setProperty("instanceChain", static_cast<juce::int64>(0x332211), nullptr);
+    juce::MemoryBlock legacyData; auto legacyXml=legacyTree.createXml(); juce::AudioProcessor::copyXmlToBinary(*legacyXml, legacyData);
+    chainRecall->setStateInformation(legacyData.getData(), static_cast<int>(legacyData.getSize()));
+    if(chainRecall->getChain()!=SpectralStripProcessor::Chain{0x11,0x22,0x33}) throw std::runtime_error("Legacy eight-module chain was not restored");
     processor->setChain({0x11,0x22,0x33});
     chainRecall->setChain({0x11,0x31,0x99,0x22});
     if(chainRecall->getChain()!=SpectralStripProcessor::Chain{0x11,0x22}) throw std::runtime_error("Invalid chain was not sanitized");
     auto duplicates=std::make_unique<SpectralStripProcessor>(); duplicates->setChain({});
     for(int i=0;i<SpectralEngine::maxModules;++i) if(!duplicates->addInstance(3)) throw std::runtime_error("Duplicate Delay insertion failed");
     if(duplicates->addInstance(3)) throw std::runtime_error("Capacity limit failed");
+    const int last=duplicates->getChain()[SpectralEngine::maxModules-1];
+    if(SpectralEngine::entryType(last)!=3 || SpectralEngine::entrySlot(last)!=SpectralEngine::maxModules-1)
+        throw std::runtime_error("The twentieth module has no independent slot");
     auto* firstTime=duplicates->state.getParameter(SpectralStripProcessor::moduleParamID(0,"delayMs"));
     auto* secondTime=duplicates->state.getParameter(SpectralStripProcessor::moduleParamID(1,"delayMs"));
     firstTime->setValueNotifyingHost(firstTime->convertTo0to1(120)); secondTime->setValueNotifyingHost(secondTime->convertTo0to1(430));
@@ -226,6 +253,61 @@ void runProcessorTests()
             }
         }
         if(energy<40) throw std::runtime_error("Module transition failed to recover audio");
+    }
+    // Exercise the real processor (no test-only allocation in its DSP path).
+    {
+        auto live = std::make_unique<SpectralStripProcessor>();
+        live->prepareToPlay(48000, 128);
+        std::unique_ptr<juce::AudioProcessorEditor> editor(live->createEditor());
+        juce::ComboBox* add=nullptr;
+        for(int i=0;i<editor->getNumChildComponents();++i)
+            if(auto* combo=dynamic_cast<juce::ComboBox*>(editor->getChildComponent(i)))
+                if(combo->getTextWhenNothingSelected()=="+  Add module") add=combo;
+        if(add==nullptr) throw std::runtime_error("Missing add-module menu");
+        std::atomic<bool> running {true}, finite {true};
+        std::atomic<int> blocks {0};
+        std::thread audio([&]
+        {
+            juce::AudioBuffer<float> block(2, 128);
+            juce::MidiBuffer events;
+            while (running.load())
+            {
+                for (int ch=0; ch<2; ++ch)
+                    for (int n=0; n<128; ++n) block.setSample(ch,n,.05f);
+                live->processBlock(block, events);
+                for (int ch=0; ch<2; ++ch)
+                    for (int n=0; n<128; ++n)
+                        if (!std::isfinite(block.getSample(ch,n))) finite.store(false);
+                ++blocks;
+            }
+        });
+        for (int pass=0; pass<12; ++pass)
+        {
+            live->setChain({});
+            for (int slot=0; slot<SpectralEngine::maxModules; ++slot)
+                add->setSelectedId(1+(slot+pass)%6,juce::sendNotificationSync);
+            editor->setSize(pass%2==0 ? 780 : 1040,pass%2==0 ? 600 : 800);
+            editor->createComponentSnapshot(editor->getLocalBounds());
+            auto chain=live->getChain();
+            std::reverse(chain.begin(),chain.end()); live->setChain(chain);
+            live->reset();
+            if (pass%4==0) live->prepareToPlay(pass%8==0 ? 96000 : 48000,128);
+            juce::MemoryBlock saved; live->getStateInformation(saved);
+            live->setStateInformation(saved.getData(),static_cast<int>(saved.getSize()));
+        }
+        running.store(false); audio.join();
+        if (!finite.load() || blocks.load()==0) throw std::runtime_error("Concurrent chain edits failed");
+        live->setChain({});
+        juce::AudioBuffer<float> block(2,128); juce::MidiBuffer events;
+        double energy=0;
+        for(int b=0;b<1000;++b)
+        {
+            for(int ch=0;ch<2;++ch) for(int n=0;n<128;++n) block.setSample(ch,n,.05f);
+            live->processBlock(block,events);
+            if(b>950) for(int n=0;n<128;++n) energy+=block.getSample(0,n)*block.getSample(0,n);
+        }
+        if(energy<1) throw std::runtime_error("Audio did not recover after concurrent edits");
+        std::cout << "PASS concurrent insert/remove/reorder, state recall and reprepare during audio\n";
     }
     std::cout << "PASS module chain recall, legacy migration and playback transitions\n";
     std::cout << "PASS processor FFT transitions, latency updates, state recall, legacy state and host bypass\n";

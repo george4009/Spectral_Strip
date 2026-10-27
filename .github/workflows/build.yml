@@ -1,0 +1,111 @@
+# Builds and tests Spectral Strip on macOS, Windows and Linux.
+# Every push and pull request uploads the plug-ins as workflow artifacts; pushing a tag
+# such as "v0.8.3" also creates a GitHub release with the three archives attached.
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ "v*" ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  JUCE_VERSION: "9.0.2"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-14
+            targets: SpectralStrip_AU SpectralStrip_VST3 SpectralStrip_Standalone SpectralStripTests
+          - name: Windows
+            os: windows-latest
+            targets: SpectralStrip_VST3 SpectralStrip_Standalone SpectralStripTests
+          - name: Linux
+            # The oldest available runner, so the binaries also run on older distributions.
+            os: ubuntu-22.04
+            targets: SpectralStrip_VST3 SpectralStrip_Standalone SpectralStripTests
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get JUCE
+        uses: actions/checkout@v4
+        with:
+          repository: juce-framework/JUCE
+          ref: ${{ env.JUCE_VERSION }}
+          path: JUCE
+
+      - name: Patch JUCE
+        shell: bash
+        run: git -C JUCE apply "$GITHUB_WORKSPACE/patches/juce-au-automatable-parameter-list.patch"
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libjack-jackd2-dev libfreetype-dev libfontconfig1-dev \
+            libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev libxrandr-dev \
+            libxrender-dev libxi-dev libglu1-mesa-dev xvfb
+
+      - name: Configure
+        shell: bash
+        run: |
+          EXTRA=""
+          if [[ "$RUNNER_OS" == "macOS" ]]; then EXTRA="-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"; fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DJUCE_PATH="$GITHUB_WORKSPACE/JUCE" $EXTRA
+
+      - name: Build
+        shell: bash
+        run: cmake --build build --config Release --parallel 4 --target ${{ matrix.targets }}
+
+      - name: Test
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            xvfb-run -a ctest --test-dir build -C Release --output-on-failure
+          else
+            ctest --test-dir build -C Release --output-on-failure
+          fi
+
+      - name: Package
+        shell: bash
+        run: |
+          VERSION=$(grep -m1 -oE 'VERSION [0-9]+\.[0-9]+\.[0-9]+' CMakeLists.txt | cut -d' ' -f2)
+          OUT="Spectral-Strip-$VERSION-${{ matrix.name }}"
+          ART="build/SpectralStrip_artefacts/Release"
+          mkdir -p "$OUT"
+          cp -R "$ART/VST3/Spectral Strip.vst3" "$OUT/"
+          cp README.md LICENSE "$OUT/"
+          cp -R licenses "$OUT/"
+          case "$RUNNER_OS" in
+            macOS)
+              cp -R "$ART/AU/Spectral Strip.component" "$OUT/"
+              cp -R "$ART/Standalone/Spectral Strip.app" "$OUT/" ;;
+            Windows)
+              cp "$ART/Standalone/Spectral Strip.exe" "$OUT/" ;;
+            Linux)
+              cp "$ART/Standalone/Spectral Strip" "$OUT/" ;;
+          esac
+          if [[ "$RUNNER_OS" == "Windows" ]]; then 7z a "$OUT.zip" "$OUT" > /dev/null; else zip -qry "$OUT.zip" "$OUT"; fi
+          echo "ARCHIVE=$OUT.zip" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARCHIVE }}
+          path: ${{ env.ARCHIVE }}
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ARCHIVE }}

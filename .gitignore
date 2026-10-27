@@ -1,5 +1,14 @@
+# Build output and local dependencies
 Builds/
+build/
+*.pkg
+*.tar.gz
+*.zip
+
+# Local backups
+Backups/
+
+# macOS / Xcode
 .DS_Store
 *.xcuserstate
 xcuserdata/
-Backups/

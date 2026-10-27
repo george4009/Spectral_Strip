@@ -1,21 +1,100 @@
-#include "../Source/SpectralEngine.h"
+#include "TestEngine.h"
 #include <iostream>
 #include <random>
 #include <stdexcept>
+#include <chrono>
+#include <fstream>
 static void require(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
 void runProcessorTests();
+void runSmearTiltTests();
 void runAuditTests();
 void runReverbTests();
 int main(int argc,char* argv[])
 {
     try
     {
+        // --benchmark [scenario] runs one scenario at FFT 2048 for 30 s, long enough for a profiler.
+        if((argc==2 || argc==3) && std::string(argv[1])=="--benchmark")
+        {
+            juce::ScopedNoDenormals guard;
+            const int only=argc==3 ? std::atoi(argv[2]) : -1;
+            const int samples=only>=0 ? 48000*30 : 144000;
+            for(int choice=0;choice<SpectralEngine::choices;++choice)
+            for(int scenario=0;scenario<3;++scenario)
+            {
+                if(only>=0 && (scenario!=only || choice!=2)) continue;
+                auto e=std::make_unique<TestEngine>(); e->prepare(48000,choice);
+                SpectralEngine::Settings settings; settings.useInstances=true;
+                if(scenario==1) settings.chain={0x11,0x22,0x33,0x44,0x55,0x66};
+                if(scenario==2) settings.chain={0x61,0x62,0x63,0x64,0x65,0x66,0x67,0x68};
+                for(auto& module:settings.modules)
+                {module.smear=.5f;module.gate=true;module.delay=true;}
+                double checksum=0;
+                const auto start=std::chrono::steady_clock::now();
+                for(int i=0;i<samples;++i)
+                {
+                    float in[2]{.1f*std::sin(.0576f*i),.1f*std::sin(.0831f*i)},wet[2]{},dry[2]{};
+                    e->process(in,wet,dry,2,settings);
+                    require(std::isfinite(wet[0]) && std::isfinite(wet[1]),"Benchmark non-finite output");
+                    checksum+=wet[0]*wet[0]+wet[1]*wet[1];
+                }
+                const double elapsed=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
+                std::cout<<"BENCH FFT "<<e->getSize()<<" scenario "<<scenario
+                         <<" stereo DSP/audio "<<elapsed/(samples/48000.0)*100<<"% energy "<<checksum<<'\n';
+            }
+            return 0;
+        }
+        // Raw float output of every effect under automation, for exact before/after comparison.
+        if(argc==3 && std::string(argv[1])=="--dump")
+        {
+            juce::ScopedNoDenormals guard;
+            std::ofstream file(argv[2],std::ios::binary);
+            require(file.good(),"Cannot open dump file");
+            const std::array<std::array<int,SpectralEngine::maxModules>,6> chains {{
+                {0x11,0x22,0x33},{0x11,0x22,0x33,0x44,0x55,0x66},{0x61,0x62,0x63,0x64,0x65,0x66,0x67,0x68},
+                {0x44,0x55,0x11,0x33},{0x33,0x22,0x66,0x41},{0x51,0x12,0x23,0x34}}};
+            for(const double rate : {44100.0,48000.0,96000.0})
+            for(const int choice : {0,2,4})
+            for(size_t c=0;c<chains.size();++c)
+            {
+                auto e=std::make_unique<TestEngine>(); e->prepare(rate,choice);
+                SpectralEngine::Settings settings; settings.useInstances=true; settings.chain=chains[c];
+                std::mt19937 rng(static_cast<unsigned>(c*31+static_cast<size_t>(choice))); std::uniform_real_distribution<float> noise(-.05f,.05f);
+                const int length=static_cast<int>(rate*1.5);
+                for(int i=0;i<length;++i)
+                {
+                    if(i%4000==0)
+                    {
+                        const float t=static_cast<float>(i/4000);
+                        settings.low=(i/4000)%3==0 ? 20.0f : 150.0f+40*t; settings.high=(i/4000)%4==0 ? 20000.0f : 6000.0f-90*t;
+                        settings.bandFilter=(i/4000)%5!=4;
+                        for(size_t m=0;m<settings.modules.size();++m)
+                        {
+                            auto& module=settings.modules[m]; const float u=std::fmod(.37f*t+.11f*static_cast<float>(m),1.0f);
+                            module.freeze=(i/4000+static_cast<int>(m))%3==1; module.smear=u; module.gate=true; module.invert=(i/4000)%4==3;
+                            module.threshold=-70+50*u; module.gateTilt=6*u; module.gateAttack=1+50*u; module.gateRelease=5+400*u;
+                            module.delay=true; module.delayMs=20+600*u; module.spread=2*u-1; module.feedback=.9f*u; module.damping=u; module.delayMix=1-u;
+                            module.blurAmount=u; module.blurWidth=50+2000*u; module.blurMix=1-.5f*u;
+                            module.tremoloRate=.5f+15*u; module.tremoloDepth=u; module.tremoloShape=u;
+                            module.reverbDecay=1+10*u; module.reverbSize=u; module.reverbShimmer=u; module.reverbTone=u; module.reverbMix=.2f+.6f*u;
+                        }
+                    }
+                    const float x=static_cast<float>(i)/static_cast<float>(rate);
+                    float in[2]{.2f*std::sin(juce::MathConstants<float>::twoPi*220*x)*(i%24000<12000 ? 1.0f : 0.0f)+noise(rng),
+                                .15f*std::sin(juce::MathConstants<float>::twoPi*1375*x)+noise(rng)},wet[2]{},dry[2]{};
+                    e->process(in,wet,dry,2,settings);
+                    file.write(reinterpret_cast<const char*>(wet),sizeof(wet));
+                    file.write(reinterpret_cast<const char*>(dry),sizeof(dry));
+                }
+            }
+            return 0;
+        }
         if(argc==2 && std::string(argv[1])=="--audit"){runAuditTests();return 0;}
         runReverbTests();
         runAuditTests();
         for (double sr : {44100.0, 48000.0, 96000.0, 192000.0})
         {
-            auto engine = std::make_unique<SpectralEngine>(); engine->prepare(sr);
+            auto engine = std::make_unique<TestEngine>(); engine->prepare(sr);
             SpectralEngine::Settings s;
             std::mt19937 rng(42); std::uniform_real_distribution<float> dist(-0.3f,0.3f);
             std::vector<std::array<float,2>> source(30000);
@@ -46,7 +125,7 @@ int main(int argc,char* argv[])
             std::cout << "PASS " << sr << " Hz: stereo reconstruction, latency, effects stress; max error " << maxError << '\n';
         }
         // Frozen tone must remain audible after the input becomes silent.
-        auto engine=std::make_unique<SpectralEngine>(); engine->prepare(48000);
+        auto engine=std::make_unique<TestEngine>(); engine->prepare(48000);
         SpectralEngine::Settings s; float energy=0;
         for(int i=0;i<60000;++i)
         {
@@ -60,7 +139,7 @@ int main(int argc,char* argv[])
         // Gate must suppress a quiet tone and inverted gate must retain it.
         auto gateEnergy = [](bool enabled, bool inverted)
         {
-            auto e = std::make_unique<SpectralEngine>(); e->prepare(48000);
+            auto e = std::make_unique<TestEngine>(); e->prepare(48000);
             SpectralEngine::Settings settings; settings.gate=enabled; settings.invert=inverted;
             settings.threshold=-10;
             double sum=0;
@@ -141,7 +220,7 @@ int main(int argc,char* argv[])
         // LOW/HIGH must attenuate outside the band even with all effects off.
         auto measureFiltered = [](float frequency, float low, float high, bool enabled)
         {
-            auto e = std::make_unique<SpectralEngine>(); e->prepare(48000);
+            auto e = std::make_unique<TestEngine>(); e->prepare(48000);
             SpectralEngine::Settings settings; settings.low=low; settings.high=high; settings.bandFilter=enabled;
             double energy=0;
             for(int i=0;i<48000;++i)
@@ -155,7 +234,7 @@ int main(int argc,char* argv[])
         // Closing HIGH must also reject FFT DC leakage and crossed LOW/HIGH values.
         for(int choice=0;choice<SpectralEngine::choices;++choice)
         {
-            auto e=std::make_unique<SpectralEngine>(); e->prepare(48000,choice);
+            auto e=std::make_unique<TestEngine>(); e->prepare(48000,choice);
             SpectralEngine::Settings settings; settings.chain={};
             for(int mode=0;mode<4;++mode)
             {
@@ -190,7 +269,7 @@ int main(int argc,char* argv[])
         std::cout << "PASS logarithmic delay dispersion\n";
         // A half-frame delay must not cancel a partial whose phase turns ~2/3 cycle per hop.
         {
-            auto e=std::make_unique<SpectralEngine>(); e->prepare(48000);
+            auto e=std::make_unique<TestEngine>(); e->prepare(48000);
             SpectralEngine::Settings settings; settings.delay=true; settings.delayMix=1; settings.feedback=0; settings.spread=0;
             settings.delayMs=1000.0f*10.5f*SpectralEngine::defaultHop/48000.0f;
             constexpr int start=12000, end=30000, latency=SpectralEngine::defaultSize+10*SpectralEngine::defaultHop+SpectralEngine::defaultHop/2;
@@ -212,7 +291,7 @@ int main(int argc,char* argv[])
         // DAMPING shortens high repeats and leaves low repeats untouched.
         auto tailEnergy = [&](float frequency, float damping)
         {
-            auto e=std::make_unique<SpectralEngine>(); e->prepare(48000);
+            auto e=std::make_unique<TestEngine>(); e->prepare(48000);
             SpectralEngine::Settings settings; settings.delay=true; settings.delayMix=1; settings.feedback=.8f;
             settings.spread=0; settings.delayMs=100; settings.damping=damping;
             double energy=0;
@@ -230,7 +309,7 @@ int main(int argc,char* argv[])
         // ATTACK and RELEASE are independent: slow release holds a tone that drops below threshold.
         auto gateWindow = [&](float attack, float release, bool rising)
         {
-            auto e=std::make_unique<SpectralEngine>(); e->prepare(48000);
+            auto e=std::make_unique<TestEngine>(); e->prepare(48000);
             SpectralEngine::Settings settings; settings.gate=true; settings.gateAttack=attack; settings.gateRelease=release;
             double energy=0;
             for(int i=0;i<36000;++i)
@@ -248,7 +327,7 @@ int main(int argc,char* argv[])
         // TILT lowers the threshold for highs: a quiet 8 kHz tone passes at 6 dB/oct.
         auto tiltEnergy = [&](bool gate, float tilt)
         {
-            auto e=std::make_unique<SpectralEngine>(); e->prepare(48000);
+            auto e=std::make_unique<TestEngine>(); e->prepare(48000);
             SpectralEngine::Settings settings; settings.gate=gate; settings.threshold=-30; settings.gateTilt=tilt;
             double energy=0;
             for(int i=0;i<48000;++i)
@@ -266,7 +345,7 @@ int main(int argc,char* argv[])
         // SHIMMER adds a sustained +12 semitone voice to the captured sound.
         auto frozen = [&](float shimmer, int choice, std::vector<float>& out)
         {
-            auto e=std::make_unique<SpectralEngine>(); e->prepare(48000, choice);
+            auto e=std::make_unique<TestEngine>(); e->prepare(48000, choice);
             SpectralEngine::Settings settings; settings.shimmer=shimmer;
             double energy=0;
             for(int i=0;i<60000;++i)
@@ -289,7 +368,7 @@ int main(int argc,char* argv[])
         // A gate after the delay suppresses quiet repeats; before it, repeats survive.
         const auto orderedTail = [&](std::array<int,SpectralEngine::maxModules> chain)
         {
-            auto engine=std::make_unique<SpectralEngine>(); engine->prepare(48000);
+            auto engine=std::make_unique<TestEngine>(); engine->prepare(48000);
             SpectralEngine::Settings settings; settings.chain=chain;
             settings.bandFilter=false;
             settings.gate=true; settings.threshold=-20; settings.gateTilt=0;
@@ -309,7 +388,7 @@ int main(int argc,char* argv[])
         require(gateBefore>gateAfter*2, "Module order did not change the audio path");
         // An empty strip must reconstruct the input even with every effect enabled.
         {
-            auto engine=std::make_unique<SpectralEngine>(); engine->prepare(48000);
+            auto engine=std::make_unique<TestEngine>(); engine->prepare(48000);
             SpectralEngine::Settings settings; settings.chain={}; settings.bandFilter=false; settings.freeze=true; settings.gate=true; settings.delay=true; settings.high=200;
             for(int i=0;i<20000;++i)
             {
@@ -321,7 +400,7 @@ int main(int argc,char* argv[])
         std::cout << "PASS module order changes audio; empty strip is transparent\n";
         const auto duplicateGates=[&](bool second)
         {
-            auto e=std::make_unique<SpectralEngine>(); e->prepare(48000);
+            auto e=std::make_unique<TestEngine>(); e->prepare(48000);
             SpectralEngine::Settings settings; settings.useInstances=true; settings.bandFilter=false;
             settings.chain=second ? std::array<int,SpectralEngine::maxModules>{0x21,0x24} : std::array<int,SpectralEngine::maxModules>{0x21};
             settings.modules[0].gate=true; settings.modules[0].threshold=-90; settings.modules[0].gateTilt=0;
@@ -333,7 +412,7 @@ int main(int argc,char* argv[])
         };
         require(duplicateGates(true)<duplicateGates(false)*.001,"Duplicate Gate parameters are shared");
         {
-            auto e=std::make_unique<SpectralEngine>(); e->prepare(48000);
+            auto e=std::make_unique<TestEngine>(); e->prepare(48000);
             SpectralEngine::Settings settings; settings.chain={}; settings.high=200; settings.bandFilter=true;
             double energy=0;
             for(int i=0;i<30000;++i)
@@ -341,7 +420,7 @@ int main(int argc,char* argv[])
             require(energy<.001,"Fixed filter disappeared with empty strip");
         }
         {
-            auto e=std::make_unique<SpectralEngine>(); e->prepare(48000);
+            auto e=std::make_unique<TestEngine>(); e->prepare(48000);
             SpectralEngine::Settings settings; settings.useInstances=true; settings.chain={0x31,0x34};
             for(const int slot : {0,3})
             { auto& delay=settings.modules[static_cast<size_t>(slot)]; delay.delay=true; delay.delayMix=1; delay.feedback=0; delay.spread=0; }
@@ -362,7 +441,7 @@ int main(int argc,char* argv[])
         std::cout << "PASS independent duplicate Gates/Delays and fixed filter with empty strip\n";
         const auto renderBlur=[&](float width,float amount,float mix,bool enabled,bool twice=false,int choice=2)
         {
-            auto e=std::make_unique<SpectralEngine>(); e->prepare(48000,choice);
+            auto e=std::make_unique<TestEngine>(); e->prepare(48000,choice);
             SpectralEngine::Settings settings; settings.useInstances=true; settings.bandFilter=false;
             settings.chain=twice ? std::array<int,SpectralEngine::maxModules>{0x41,0x44} : std::array<int,SpectralEngine::maxModules>{0x41};
             for(const int slot : {0,3})
@@ -412,7 +491,7 @@ int main(int argc,char* argv[])
         std::cout << "PASS Blur spread, width, bypass, serial copies and all FFT sizes\n";
         for(int choice=0;choice<SpectralEngine::choices;++choice)
         {
-            auto e=std::make_unique<SpectralEngine>(); e->prepare(48000,choice);
+            auto e=std::make_unique<TestEngine>(); e->prepare(48000,choice);
             SpectralEngine::Settings settings; settings.useInstances=true; settings.chain={0x51}; settings.bandFilter=false;
             settings.modules[0].tremoloDepth=1;
             for(int mode=0;mode<5;++mode)
@@ -452,7 +531,7 @@ int main(int argc,char* argv[])
             std::vector<float> previous;
             for(float shape : {0.0f,.25f,.5f,.75f,1.0f})
             {
-                auto engine=std::make_unique<SpectralEngine>();engine->prepare(48000,choice);
+                auto engine=std::make_unique<TestEngine>();engine->prepare(48000,choice);
                 SpectralEngine::Settings s;s.useInstances=true;s.chain={0x51};s.bandFilter=false;
                 s.modules[0].tremoloDepth=1;s.modules[0].tremoloShape=shape;s.modules[0].tremoloRate=4;
                 std::vector<float> gain;int high=0,transitionSamples=0;double change=0;
@@ -477,6 +556,37 @@ int main(int argc,char* argv[])
                 previous=std::move(gain);
             }
         }
+        // Slots past the fifteenth use the wide chain encoding and must still process.
+        {
+            const int wide=SpectralEngine::makeEntry(2, SpectralEngine::maxModules-1);
+            require(SpectralEngine::entryType(wide)==2 && SpectralEngine::entrySlot(wide)==SpectralEngine::maxModules-1, "Wide module entry was not decoded");
+            auto measure=[&](bool closeLast)
+            {
+                auto e=std::make_unique<TestEngine>(); e->prepare(48000);
+                SpectralEngine::Settings settings; settings.useInstances=true; settings.bandFilter=false;
+                for(int slot=0; slot<SpectralEngine::maxModules; ++slot)
+                {
+                    settings.chain[static_cast<size_t>(slot)]=SpectralEngine::makeEntry(2, slot);
+                    auto& gate=settings.modules[static_cast<size_t>(slot)];
+                    gate.gate=true; gate.threshold=-90; gate.gateTilt=0;
+                }
+                if(closeLast) settings.modules.back().threshold=0;
+                double energy=0;
+                for(int i=0;i<36000;++i)
+                {
+                    float in[2]{tone(.2f,1500,i),0}, wet[2]{}, dry[2]{};
+                    e->process(in,wet,dry,1,settings);
+                    require(std::isfinite(wet[0]), "Twenty gates produced a non-finite sample");
+                    if(i>24000) energy+=wet[0]*wet[0];
+                }
+                return energy;
+            };
+            const double open=measure(false);
+            require(open>1, "Twenty open gates did not pass audio");
+            require(measure(true)<open*0.001, "The twentieth gate did not close the band");
+        }
+        std::cout << "PASS twenty independent modules, including a slot past the legacy 15-slot packing\n";
+        runSmearTiltTests();
         runProcessorTests();
         return 0;
     }

@@ -1,3 +1,4 @@
+#include "TestEngine.h"
 #include "../Source/PluginProcessor.h"
 #include <iostream>
 #include <stdexcept>
@@ -7,7 +8,7 @@ void runReverbTests()
 {
     for(int choice=0;choice<SpectralEngine::choices;++choice)for(int copies : {1,2})
     {
-        auto engine=std::make_unique<SpectralEngine>();engine->prepare(48000,choice);
+        auto engine=std::make_unique<TestEngine>();engine->prepare(48000,choice);
         SpectralEngine::Settings s;s.useInstances=true;s.chain=copies==1 ? std::array<int,SpectralEngine::maxModules>{0x61} : std::array<int,SpectralEngine::maxModules>{0x61,0x62};
         s.modules[0].reverbMix=s.modules[1].reverbMix=copies==1 ? 0.0f : 1.0f;
         s.modules[0].reverb=s.modules[1].reverb=copies==1;
@@ -22,7 +23,7 @@ void runReverbTests()
         demand(error<2e-5f,"Reverb bridge dry/wet alignment or neutral reconstruction failed");
     }
     {
-        auto engine=std::make_unique<SpectralEngine>();engine->prepare(48000,4);
+        auto engine=std::make_unique<TestEngine>();engine->prepare(48000,4);
         SpectralEngine::Settings s;s.useInstances=true;s.chain={0x61,0x12};s.modules[0].reverbMix=0;s.modules[1].freeze=true;
         double energy=0;
         for(int i=0;i<96000;++i)
@@ -84,7 +85,7 @@ void runReverbTests()
     }
     // Actual FFT bridge must deliver the octave and its sustained tail too.
     {
-        auto e=std::make_unique<SpectralEngine>();e->prepare(48000,2);
+        auto e=std::make_unique<TestEngine>();e->prepare(48000,2);
         SpectralEngine::Settings settings;settings.useInstances=true;settings.chain={0x61};
         settings.modules[0].reverbDecay=8;settings.modules[0].reverbShimmer=1;
         settings.modules[0].reverbTone=.8f;settings.modules[0].reverbMix=1;

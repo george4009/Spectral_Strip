@@ -1,3 +1,4 @@
+#include "TestEngine.h"
 #include "../Source/PluginProcessor.h"
 #include <iostream>
 #include <stdexcept>
@@ -11,7 +12,7 @@ void runAuditTests()
     float closedPeak=0;
     for(int choice=0;choice<SpectralEngine::choices;++choice)
     {
-        auto engine=std::make_unique<SpectralEngine>();engine->prepare(48000,choice);
+        auto engine=std::make_unique<TestEngine>();engine->prepare(48000,choice);
         SpectralEngine::Settings s;s.chain={};s.high=20;
         for(int reset=0;reset<2;++reset)
         {
@@ -37,7 +38,7 @@ void runAuditTests()
     p.reset();
     for(double rate : {44100.0,96000.0}) for(int choice : {0,4})
     {
-        auto e=std::make_unique<SpectralEngine>(); e->prepare(rate,choice);
+        auto e=std::make_unique<TestEngine>(); e->prepare(rate,choice);
         SpectralEngine::Settings s; s.useInstances=true; s.chain={0x11,0x22,0x33,0x44,0x55,0x36,0x47,0x58};
         std::mt19937 rng(987);std::uniform_real_distribution<float> noise(-.06f,.06f);
         float peak=0,leak=0; bool finite=true;
@@ -101,7 +102,7 @@ void runAuditTests()
     // A smoothed tone must retain its pitch after the input becomes silent.
     for(int choice : {0,1,2,3,4})
     {
-        auto engine=std::make_unique<SpectralEngine>();engine->prepare(48000,choice);
+        auto engine=std::make_unique<TestEngine>();engine->prepare(48000,choice);
         SpectralEngine::Settings settings;settings.chain={0x11};settings.smear=1;
         double energy=0,frozenEnergy=0;std::complex<double> fundamental {},frozenFundamental {};int count=0;
         for(int i=0;i<144000;++i)
@@ -115,7 +116,7 @@ void runAuditTests()
         check(frozenEnergy>.01 && 2*std::norm(frozenFundamental)/(24000*std::max(frozenEnergy,1e-20))>.5,"Freeze captures Smear tail with correct pitch after input silence");
         const double pitchFraction=2*std::norm(fundamental)/(count*std::max(energy,1e-20));
         std::cout<<"Smear FFT "<<engine->getSize()<<" tail energy "<<energy<<" pitch fraction "<<pitchFraction<<'\n';
-        check(energy>.01 && pitchFraction>.5,"Smear tail preserves the input pitch after silence");
+        check(energy>.01 && pitchFraction>.9,"Smear tail preserves the input pitch after silence");
         engine->selectSize(choice);float residue=0;
         for(int i=0;i<24000;++i){float in[2]{},wet[2]{},dry[2]{};engine->process(in,wet,dry,1,settings);residue=std::max(residue,std::abs(wet[0]));}
         check(residue==0,"Smear reset clears both amplitude and phase history");
@@ -152,5 +153,36 @@ void runAuditTests()
         check(error<1e-10 && power(heldZero)>.1,"Smear automation preserves an already captured Freeze");
     }
     check(!checkStereoLeak,"Smear does not leak into a silent stereo channel");
+    // Measure attack attenuation explicitly: prior tests covered Smear's
+    // sustain/intonation but did not quantify short or repeated transients.
+    for(bool bandlimited : {false,true})for(bool repeated : {false,true})
+    {
+        std::array<float,3> peaks {};std::array<double,3> attackEnergy {};
+        for(int mode=0;mode<3;++mode)
+        {
+            auto e=std::make_unique<TestEngine>();e->prepare(48000,2);
+            SpectralEngine::Settings s;s.chain={0x11};s.bandFilter=false;s.smear=mode==0 ? 0.0f : mode==1 ? .5f : 1.0f;
+            std::mt19937 generator(901);std::uniform_real_distribution<float> random(-1,1);float low1=0,low2=0;
+            for(int i=0;i<192000;++i)
+            {
+                const int relative=i-24000;
+                const int hit=relative>=0 ? relative%12000 : -1;
+                const bool active=relative>=0 && (repeated || relative<12000) && hit<1440;
+                const float white=active ? random(generator) : 0;
+                const float coefficient=1-std::exp(-juce::MathConstants<float>::twoPi*4000/48000);
+                low1+=coefficient*(white-low1);low2+=coefficient*(low1-low2);
+                const float x=active ? .5f*(bandlimited ? low2 : white)*std::exp(-static_cast<float>(hit)/320) : 0;
+                float in[2]{x,0},wet[2]{},dry[2]{};e->process(in,wet,dry,1,s);
+                const int outputRelative=i-24000-e->getLatency(s.chain);
+                if(outputRelative>=0 && (repeated || outputRelative<12000) && outputRelative%12000<1440)
+                {peaks[static_cast<size_t>(mode)]=std::max(peaks[static_cast<size_t>(mode)],std::abs(wet[0]));attackEnergy[static_cast<size_t>(mode)]+=wet[0]*wet[0];}
+            }
+        }
+        std::cout<<"Smear "<<(bandlimited ? "bandlimited " : "broadband ")<<(repeated ? "repeated" : "isolated")<<" transient peaks 0/0.5/1 "<<peaks[0]<<" / "<<peaks[1]<<" / "<<peaks[2]<<" attack energy "<<attackEnergy[0]<<" / "<<attackEnergy[1]<<" / "<<attackEnergy[2]<<'\n';
+        if(repeated)
+            check(peaks[2]<peaks[0]*.09f && peaks[1]<peaks[0]*.13f,
+                  "Smear suppresses repeated transient peaks at medium and maximum amounts");
+        check(peaks[2]<peaks[0]*.5f && attackEnergy[2]<attackEnergy[0]*.25 && attackEnergy[2]<attackEnergy[1],"Smear maximum attenuates short transient attacks");
+    }
     if(failures)throw std::runtime_error("General audit regressions failed");
 }

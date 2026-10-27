@@ -1,3 +1,5 @@
+> Historical development notes in Italian, kept for reference. See the English [README](../README.md) and [CHANGELOG](../CHANGELOG.md) for current documentation. File names and scripts mentioned below refer to the layout before 0.8.0.
+
 # Verifiche — 28 settembre 2026
 
 Ambiente: macOS Apple Silicon, Xcode 26.3 (17C529), JUCE locale 9.0.2.
@@ -244,3 +246,123 @@ Il test di stabilità numerica non sostituisce queste verifiche.
 - Test esteso a tutte le FFT a 48 kHz e FFT 2048 a 44,1/96 kHz. Regressioni Smear/cattura sulla coda, reset, bypass, stereo e copie incluse. Backup sorgente/test: Backups/pre-freeze-refine.
 - Suite completa superata in 48,83 s (Builds/test-freeze-fix.log), build Release AU/VST3/Standalone, test e preview senza warning/errori (Builds/build-freeze-fix.log).
 - AU 0.7.4 installata, versione e identità binario verificate, firma valida e auval superato (Builds/auval-freeze-fix.log). Backup AU: Backups/20261002-174031/Spectral Strip.component. Registro AU soggetto a metadati precedenti in cache: riaprire la DAW e verificare v0.7.4 nel footer. Ascolto musicale nella DAW ancora da valutare dall’utente.
+
+
+## Controllo generale e banda Smear — 0.7.5 (8 ottobre 2026)
+
+- Verificata prima la base ripristinata 0.7.3: build completa riuscita, suite CTest superata in 47,72 s, firma AU valida e auval superato. Il Freeze conserva quell’algoritmo; la modifica di fase della 0.7.4 resta annullata.
+- Corretto il trattamento degli estremi LOW/HIGH: a 20 Hz / 20 kHz gli effetti usano una maschera completamente aperta, coerente con il filtro. Prima alcune componenti dei transienti restavano dirette anche con Smear massimo e mix completamente wet. Le bande intermedie mantengono la selezione precedente.
+- Aggiunti test Smear su attacchi isolati e ripetuti, sia a banda larga sia con rumore filtrato a 4 kHz. Nei colpi ripetuti a banda larga il picco con Smear massimo scende da 0,391 prima della correzione a 0,0615; senza Smear è 0,490. Nel caso filtrato i picchi Smear 0 / 0,5 / 1 sono 0,302 / 0,0364 / 0,0281, e l’energia dei primi 30 ms scende da 26,58 a 0,262. Queste misure verificano l’attenuazione degli attacchi sintetici, non sostituiscono un ascolto musicale in Logic.
+- Build Release AU, VST3, Standalone, test e preview riuscita senza warning/errori. Suite completa superata in 49,15 s: tutti gli effetti, ordine e copie dei moduli, filtro, automazione, richiamo stato, reset, stereo e latenza alle dimensioni FFT e frequenze di campionamento previste.
+- Verifica UI della base 0.7.3: aggiunta/rimozione di una quinta istanza Freeze, scorrimento della strip, indipendenza dei valori Smear fra copie e azionamento Freeze/Shape. Ridimensionamento e trascinamento dell’ordine non ricontrollati in questa sessione.
+- AU 0.7.5 installata: versione del bundle e identità del binario con la build verificate; firma valida e AU VALIDATION SUCCEEDED. Backup precedente: Backups/20261008-013802/Spectral Strip.component. Log: Builds/build-general-smear-fix.log, Builds/test-general-smear-fix.log, Builds/Testing/Temporary/LastTest.log, Builds/auval-general-smear-fix.log. Riaprire Logic e verificare v0.7.5 nel footer per caricare il nuovo binario.
+
+## Controllo funzionalità e ottimizzazione — 0.7.6 (10 ottobre 2026)
+
+- Revisione del processore, DSP e interfaccia: allocazioni dei buffer in prepare, piani FFT precalcolati, parametri atomici, smoothing, gestione transport e richiamo stato. Nessun lock o nuova allocazione esplicita introdotto nel render.
+- Suite della build precedente superata (62 messaggi PASS); build aggiornata Release AU/VST3/Standalone, test e preview riuscita senza warning/errori del compilatore. Suite finale CTest superata: 1/1, 47,13 s. Copertura esistente: tutti gli effetti, copie/ordine dei moduli, filtro/banda, Smear, automazione, stato legacy, reset/seek, bypass, isolamento stereo, latenza e FFT a più sample rate. Log: Builds/build-review-final-20261010.log, Builds/test-review-final-20261010.log e Builds/Review20261010/Testing/Temporary/LastTest.log.
+- Ottimizzazioni: indice dry e latenza condivisi fra canali; riuso della fase già calcolata in Freeze/Smear. Nei buffer del riverbero, sostituiti modulo intero e doppia lettura con wrapping condizionale e riuso del campione. Letture valide limitate alla capacità del ring. Confronto del riverbero vecchio/nuovo bit-identico su 8 milioni di campioni, 44,1/48/96/192 kHz, entrambi i canali, variazioni parametri, silenzio, wrapping e reset. Log: Builds/reverb-equivalence-20261010.log; sorgente confronto e backup in Backups/pre-review-20261010.
+- Benchmark --benchmark aggiunto al runner: 3 s di audio stereo sintetico a 48 kHz per FFT 512/1024/2048/4096/8192. Scenario 0: Freeze/Smear + Gate + Delay; scenario 1: sei effetti diversi; scenario 2: otto Shimmer Reverb. Preparazione esclusa dal cronometraggio; generazione segnale, controllo finitezza e checksum inclusi. Misure iniziali isolate in Builds/benchmark-review-isolated-20261010.log; finali, senza suite/build concorrenti, in Builds/benchmark-review-final-20261010.log. A FFT 2048: rapporto tempo DSP/audio 10,38 -> 10,23%, 35,20 -> 32,63%, 148,46 -> 131,04% rispettivamente. Singole misure indicative, senza analisi statistica; non sono misure della DAW o delle deadline dei callback. Otto riverberi restano oltre il tempo reale su questo Mac.
+- Preview 0.7.6 avviata e layout controllato visivamente; verificati toggle Freeze e modifica Smear a 0,75 via UI. Aggiunta, trascinamento e ridimensionamento non riverificati manualmente in questa sessione; gestione catena/copertura DSP verificata dalla suite. Launch Services non ha aperto la preview: avvio diretto dell'eseguibile riuscito.
+- CMake e JUCE mancanti nei percorsi originari: recuperati CMake 4.4.4 e JUCE tag 9.0.2, commit 72782788ce18c2d4d760b28e0921d6ffc6431102. Conservati in Builds/Dependencies; Generate Xcode.command usa il fallback locale. Build verificata in Builds/Review20261010. Nessun commit creato; modifiche locali preesistenti preservate.
+- Installata AU arm64 0.7.6 in /Users/giorgio/Library/Audio/Plug-Ins/Components/Spectral Strip.component. Cartella Components inizialmente vuota, quindi nessuna AU precedente da salvare. Verificati plist, identità binaria con build e firma ad hoc valida. Primo auval non trovava il componente; aggiornato il registro riavviando AudioComponentRegistrar dell'utente, poi auval -v aufx SpSt GiAu -strict superato con versione rilevata 0.7.6: AU VALIDATION SUCCEEDED (Builds/auval-review-20261010.log).
+- Riaprire la DAW e controllare v0.7.6 nel footer. Ascolto musicale e caricamento in Logic non verificati; validazione effettuata con auval.
+
+## Ottimizzazione generale — 0.7.7 (12 ottobre 2026)
+
+- Trovato un errore di misura nella 0.7.6: SpectralStripTests e la preview erano compilati a -O0 anche in Release, perché non collegavano juce_recommended_config_flags; il plugin era già a -O3. Corretto in CMakeLists.txt; verificato -O3 nei file di argomenti Xcode del target test. I numeri del benchmark 0.7.6 vanno quindi letti come misure non ottimizzate.
+- Base 0.7.6 a -O3, FFT 2048: 3,30 / 6,21 / 15,31% (Builds/Optimization20261012/benchmark-baseline-O3.log), riconfermata a 3,27 / 6,16 / 15,17% a fine sessione. Profili con sample per scenario in Builds/Optimization20261012/profile-*.txt: dominavano atan2f, remainderf, sincosf, logaritmi per bin e, nel riverbero, sinf/cosf per campione.
+- Ottimizzazioni senza cambiamenti audio: tabelle per FFT/sample rate di frequenza, avanzamento di fase atteso, ottave del tilt Gate, damping Delay e indice del display; maschera di banda, filtro e dispersione Delay calcolati una volta per hop, condivisi fra canali e moduli; wrapping della fase esatto in float/double al posto di std::remainder; seconda polar del Freeze saltata con freezeBlend esattamente zero; azzeramento dei buffer limitato a 2×FFT attiva; indici circolari con maschera; costanti per campione del riverbero precalcolate in prepare.
+- Equivalenza: nuovo `--dump` del runner scrive wet/dry grezzi di 54 render (44,1/48/96 kHz, FFT 512/2048/8192, sei catene fra cui tutti gli effetti, otto riverberi e ordini misti), con automazione a gradini di banda, filtro on/off, Freeze, Smear, Gate inverso, Delay, Blur, Tremolo e Reverb. Uscita identica byte per byte alla base (cmp) dopo ogni passo e nella build Xcode finale. Riferimento: Builds/Optimization20261012/baseline.dump e baseline-SpectralStripTests.
+- Il wrapping della fase è confrontato con std::remainder su tutti i 2.483.027.968 float positivi e negativi con modulo inferiore a 2^21, segno dello zero incluso: 0 differenze (wrapcheck.cpp, wrapcheck.log). Una prima versione differiva solo a −2π (+0 invece di −0), corretta prima dell'adozione.
+- Risultato a FFT 2048, 48 kHz stereo: 2,00 / 4,42 / 13,42% nella build Xcode finale (benchmark-xcode-077.log), cioè circa −39%, −28% e −12%. Misure singole, indicative, non deadline dei callback nella DAW.
+- Editor: spettro ridisegnato solo se un bin si muove più di 0,01 dB o cambia la banda LOW/HIGH; piè di pagina solo quando cambiano FFT, latenza o sample rate. Non verificato visivamente in questa sessione.
+- Build Xcode Release ALL_BUILD riuscita senza warning/errori del compilatore (xcode-build-077.log); anche build Makefiles Release di tutti i target senza warning. Suite completa: 62 PASS, 6,4 s invece di circa 47 s grazie a -O3. AU prodotta con CFBundleShortVersionString 0.7.7, non installata. Backup sorgenti: Backups/pre-optimization-20261012.
+
+## Venti moduli — 0.7.8 (12 ottobre 2026)
+
+- maxModules portato da 8 a 20. Il formato storico mette tipo e slot in un byte e ne impacca otto in un int64: gli slot 16–20 non ci stanno. Gli slot 1–15 restano nel formato precedente; dal 16 in poi la voce è (tipo << 8) | (slot + 1), sempre maggiore di 255, così i due formati non si confondono.
+- La catena pubblicata al thread audio non è più un solo atomico. Un contatore pari/dispari pubblica l'array: il render legge una copia coerente e la applica solo al termine della dissolvenza, come prima.
+- Il salvataggio usa la proprietà moduleChain, elenco separato da virgole. In lettura, moduleChain ha precedenza; altrimenti si legge instanceChain (otto byte) o il chainCode della 0.3. Le sessioni vecchie non vengono riscritte finché non si salva di nuovo.
+- L'interfaccia continua a mostrarne quattro; lo scorrimento usa già il numero di moduli presenti.
+- Test: richiamo della catena a otto moduli dal formato int64; inserimento fino al ventesimo Delay con slot indipendente e rifiuto del ventunesimo; venti Gate in serie, l'ultimo dei quali chiude davvero la banda. La memoria di ogni slot, compreso il riverbero, è allocata in prepare anche se il modulo non è in uso.
+
+## Automazione dei moduli in uso — 0.7.10 (12 ottobre 2026)
+
+- I parametri di uno slot sono automatizzabili solo mentre quello slot è nella strip. LOW, HIGH, FILTER, mix, output e FFT Size restano sempre automatizzabili. Gli ID e i valori degli slot non in uso restano nel salvataggio: togliere un modulo lo nasconde dall'elenco, rimetterlo nello stesso slot riallaccia le lane.
+- L'AU segnala i parametri nascosti come NonRealTime e, a ogni cambio di catena, chiede all'host di rileggere l'elenco. In VST3 il flag viene letto alla creazione del controller, quindi un host già aperto lo aggiorna al ricaricamento del plugin.
+- Test: con Freeze e Delay in strip, smear e delayMs sono automatizzabili e threshold no; il richiamo della sessione aggiorna la stessa visibilità; aggiungere Blur espone il suo amount; svuotare la strip nasconde smear e lascia mix automatizzabile. Suite completa passata nella build Makefiles Release.
+- Logic ignora il flag NonRealTime e mostra ogni ID restituito da GetParameterList. La 0.7.10 quindi lasciava visibili anche i moduli assenti.
+
+## Elenco automazione di Logic — 0.7.11 (12 ottobre 2026)
+
+- L'AU pubblica a Logic solo i parametri con isAutomatable() vero, e un parametro lo è solo se quello slot contiene proprio quell'effetto. Freeze non pubblica i knob di Gate, Blur o Reverb dello stesso slot. Il wrapper JUCE è modificato in juce_audio_plugin_client_AU_1.mm; la patch è in patches/juce-au-automatable-parameter-list.patch e Generate Xcode.command la riapplica se manca. CMake si ferma se il sorgente JUCE non la contiene.
+- A ogni cambio di catena la cache dell'elenco viene svuotata e l'host riceve di nuovo ParameterList e ParameterInfo. Gli ID restano quelli di sempre, così una lane si riallaccia quando il modulo torna nello stesso slot. Logic conserva comunque l'elenco letto all'inserimento: togliere e rimettere il plugin è il modo per vederlo aggiornato.
+
+## Memoria dei moduli assenti — 0.7.12 (12 ottobre 2026)
+
+- Storia del Delay e linee dello Shimmer Reverb si allocano solo per gli slot che contengono quell'effetto, in prepareToPlay e prima di pubblicare una catena nuova. Gli altri effetti non le usano. Uno slot già in lettura dal thread audio non viene riallocato.
+- Il tooltip generico di SHIMMER, rimasto dal Freeze rimosso, non è più assegnato. Il knob del riverbero tiene la descrizione della voce a +12 semitoni nel feedback.
+
+## Nessuna allocazione nel callback — 0.7.13 (16 ottobre 2026)
+
+- Il callback audio non alloca più la storia del Delay né le linee del riverbero. prepareToPlay e setChain le preparano prima che la catena diventi attiva. I test del motore, che chiamano process senza passare dal processore, tengono l'allocazione con SPECTRAL_ALLOW_PROCESS_ALLOCATION. Un Delay o un riverbero senza buffer fa scattare un jassert.
+
+## Nomi dei moduli — 0.7.14 (23 ottobre 2026)
+
+- In menu, testata e nomi di automazione, Spectral Delay si chiama Delay e Shimmer Reverb si chiama Shimmer. Gli ID dei parametri non cambiano.
+
+
+## Corruzione memoria durante aggiunta moduli — 0.7.15 (23 ottobre 2026)
+
+- Riscontro reale: AUHostingServiceXPC_arrow-2026-10-23-003014.ips, AU 0.7.14, abort del malloc per corruzione heap durante il disegno. Il test Tests/AUParameterStress.mm riproduce un abort per corruzione heap sulla 0.7.14 installata (AUParameterStress-2026-10-23-003734.ips).
+- Causa riprodotta: la patch del wrapper AU modificava cachedParameterList dal message thread mentre il dispatch AU ne leggeva dimensione/contenuto sotto un altro lock. La lista poteva crescere fra il dimensionamento del buffer e la copia. Ora il message thread pubblica soltanto un flag atomico; la lista viene ricostruita esclusivamente nella richiesta della dimensione, sotto il lock di istanza del SDK. La copia usa la stessa lista e non la ricostruisce. Il filtro per effetto/slot resta attivo.
+- Secondo difetto corretto: allocateFor da setChain poteva concorrere con selectSize/reset/prepare sul motore condiviso, anche per slot non ancora attivi (reset tocca tutti gli slot). Un mutex serializza preparazione e pubblicazione; render usa solo try_lock e restituisce silenzio durante una mutazione, senza attendere allocazioni. Una modifica può produrre una breve interruzione; nessun cambiamento alle formule DSP.
+- slotType inizializzato a zero anche per gli slot vuoti. Rimossa SPECTRAL_ALLOW_PROCESS_ALLOCATION dalla compilazione: i test del processore ora eseguono lo stesso motore del plugin. Solo i render DSP diretti usano l'adattatore TestEngine.
+- Nuovo stress del processore: 240 aggiunte tramite il vero ComboBox, rimozioni, riordino, salvataggio/richiamo, cambi sample rate, reset, resize e snapshot dell'editor mentre un secondo thread elabora audio. Verificati campioni finiti e recupero dell'audio.
+- Release: 64 PASS. Stessa suite con AddressSanitizer e UndefinedBehaviorSanitizer: 64 PASS, nessun errore (leak detection disabilitata). Build AU/VST3 Release completata; solo warning Xcode sull'ordine manuale dei target.
+- Stress AU reale corretto: 2.000 cambi di stato/catena, 8.627.104 letture concorrenti, guardie del buffer intatte; lista finale 66 parametri per 12 moduli. Script di test compilabile con clang++ -std=c++17 Tests/AUParameterStress.mm -framework Cocoa -framework AudioToolbox. Passare il percorso assoluto del binario AU.
+- AU e VST3 0.7.15 installati nelle cartelle utente; backup in Backups/pre-0.7.15-20261023. auval conferma Component Version 0.7.15 e AU VALIDATION SUCCEEDED. Log in Builds/Bugfix20261023. Sessione reale di Logic non pilotata in questa verifica.
+- Installer precedente: bundle di sistema root:wheel con mode 0700, illeggibili agli utenti ordinari. Build Installer.command imposta directory 0755, file 0644 e binari 0755, disabilita la rilocazione dei bundle e controlla che AU/VST3 abbiano la stessa versione. Nuovo pkg 0.7.15; firma locale, non notarizzato. Build attuale arm64 con deployment effettivo 15.7.
+
+- Verifica finale ampliata a due lettori simultanei: PASS AU concurrent state/list queries: 27574 reads, 2000 chain changes, final parameters 66. Abilitato esplicitamente il mutex non realtime del SDK AU (di default nullo), per serializzare anche richieste host concorrenti. Verificata applicazione della patch sia da JUCE originale sia dalla precedente patch. Vecchio installer 0.7.13 conservato.
+
+
+## Smear e tilt timbrico — 0.7.16 (23 ottobre 2026)
+
+- SMEAR: due inviluppi di ampiezza in cascata, 1,5 s massimi per stadio; raccordo del controllo a 35 ms. La fase di sintesi non si riallinea a ogni nuovo attacco. Diffusione deterministica delle componenti rumorose per limitare la periodicità FFT; protezione delle note tonali mantenuta anche durante il decadimento. Il suono con SMEAR non nullo cambia intenzionalmente.
+- Confronto 0.7.15/0.7.16 a 48 kHz, FFT 2048: transienti broadband ripetuti, SMEAR 1, picco 0,0614741 → 0,0260620 (−7,45 dB); transienti limitati in banda, picco 0,0280772 → 0,00851702 (−10,36 dB). SMEAR 0,5: 0,0768936 → 0,05336 e 0,036355 → 0,0294206. Sono misure su segnali sintetici, non una garanzia su ogni materiale musicale. Rinforzati i test di attacchi ripetuti a metà e a fondo corsa.
+- Test coda 440 Hz: frazione di energia all'intonazione originale >0,9 su FFT 512/1024/2048/4096/8192. Verificati silenzio dopo reset, nessun leakage stereo, neutralità/bypass e Freeze già catturato invariato quando si muove SMEAR.
+- Il TILT visibile controlla ora nuovi parametri toneTilt (−6…+6 dB/ottava, default 0, pivot 1 kHz, estremi limitati a ±18 dB). È indipendente dall'attivazione della soppressione del Gate e agisce soltanto nella banda selezionata. Pulsante rinominato GATE; tooltip e doppio clic a zero. I vecchi gateTilt mantengono ID, range, indice e funzione di soglia per non reinterpretare le automazioni. Nuovi parametri accodati con version hint 2, ripristino a zero nelle sessioni precedenti.
+- Nuovi test tramite processore/parametri reali: 250/1000/4000 Hz, tilt ±3, FFT 512/2048/8192; risposta attesa rispettata (errore massimo misurato circa 0,12 dB). Verificati Gate spento, banda esclusa, canale silenzioso, salvataggio/richiamo e caricamento stato privo dei nuovi parametri.
+- 67 PASS Release e 67 PASS AddressSanitizer/UndefinedBehaviorSanitizer, nessun errore (leak detection disabilitata). AU stress: 2.000 cambi di catena, 33.011 letture concorrenti, guardie intatte e 68 parametri finali per 12 moduli. auval 0.7.16: AU VALIDATION SUCCEEDED.
+- Benchmark dopo le build, FFT 2048: tre effetti 2,06 → 2,45% DSP/audio; sei effetti 4,43 → 4,84%; otto riverberi 12,86 → 12,84%. Maggior costo limitato allo Smear rivisto. Log in Builds/SmearTilt20261023.
+- AU/VST3 0.7.16 installati nelle cartelle utente. Backup della 0.7.15 in Backups/pre-0.7.16-20261023. Installer 0.7.16 creato, conservati i pkg 0.7.13 e 0.7.15. Nessun ascolto soggettivo in Logic dichiarato: valutazione musicale finale da fare sull'audio dell'utente.
+
+
+## Interfaccia — 0.7.17 / 0.7.18
+
+0.7.17: SMEAR nascosto solo nella grafica; DSP, valori e automazioni conservati.
+0.7.18: TILT visualizza una sola unità dB/oct. La funzione di formato restituisce
+solo il numero; Slider aggiunge già il suffisso. Modifiche esclusivamente grafiche.
+
+## 0.7.19 — interfaccia in stile atelier (24 ottobre 2026)
+
+- Build Xcode Release AU/VST3/test riuscita; 67 PASS. Nuovo pkg `Spectral Strip 0.7.19.pkg` (firma locale, non notarizzato).
+- AU e VST3 0.7.19 installati nelle cartelle utente; backup in Backups/pre-atelier-ui-install-20261024-003241. auval: Component Version 0.7.19, AU VALIDATION SUCCEEDED. Log in Builds/AtelierUI20261024.
+- In /Library/Audio/Plug-Ins resta una copia di sistema del 16 ottobre (root, mode 0700), non modificata.
+
+## 0.7.20 — illustrazioni dei moduli legate ai parametri (24 ottobre 2026)
+
+- Build Xcode Release AU/VST3/test riuscita; 67 PASS. Nuovo pkg `Spectral Strip 0.7.20.pkg`; il pkg 0.7.19 è conservato.
+- AU e VST3 0.7.20 installati nelle cartelle utente; backup in Backups/pre-0.7.20-install-20261024-004847. auval: Component Version 0.7.20, AU VALIDATION SUCCEEDED. Log in Builds/ResponsiveArt20261024.
+
+## 0.7.21 — menu "+" accanto allo slot (24 ottobre 2026)
+
+- Il "+" dello slot tratteggiato apre l'elenco dei moduli subito sotto di sé, scalato con l'editor.
+- Build Release riuscita; 67 PASS; nuovo pkg `Spectral Strip 0.7.21.pkg` (pkg precedenti conservati). AU/VST3 0.7.21 installati nelle cartelle utente, auval AU VALIDATION SUCCEEDED. Log in Builds/AddMenu20261024.
+
+## 0.7.22 — scorrimento continuo della strip (24 ottobre 2026)
+
+- I moduli scorrono in modo continuo: trackpad 1:1 con l'inerzia di macOS, rotella del mouse animata, barra di scorrimento e auto-scroll durante il trascinamento senza scatti di modulo. Gli slider dei moduli non reagiscono più alla rotella, che scorre la strip.
+- Build Release riuscita; 67 PASS; nuovo pkg `Spectral Strip 0.7.22.pkg` (pkg precedenti conservati). AU/VST3 0.7.22 installati nelle cartelle utente, auval AU VALIDATION SUCCEEDED. Log in Builds/SmoothScroll20261024.

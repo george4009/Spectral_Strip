@@ -1,0 +1,63 @@
+diff --git a/modules/juce_audio_plugin_client/juce_audio_plugin_client_AU_1.mm b/modules/juce_audio_plugin_client/juce_audio_plugin_client_AU_1.mm
+index 579e261..c8fd58e 100644
+--- a/modules/juce_audio_plugin_client/juce_audio_plugin_client_AU_1.mm
++++ b/modules/juce_audio_plugin_client/juce_audio_plugin_client_AU_1.mm
+@@ -2040,6 +2040,9 @@ void handleAsyncUpdate() override
+ 
+             if ((flags & parameterInfoChangedFlag) != 0)
+             {
++                // SpectralStrip: rebuild the host-visible list before Logic reads it again.
++                owner.parameterListReady = false;
++                owner.cachedParameterList.clear();
+                 owner.PropertyChanged (kAudioUnitProperty_ParameterList, kAudioUnitScope_Global, 0);
+                 owner.PropertyChanged (kAudioUnitProperty_ParameterInfo, kAudioUnitScope_Global, 0);
+             }
+@@ -2081,7 +2084,10 @@ void handleAsyncUpdate() override
+     Array<const AudioProcessorParameterGroup*> parameterGroups;
+ 
+     // Stores the parameter IDs in the order that they will be reported to the host.
++    // SpectralStrip: list only automatable parameters. Logic's automation menu
++    // shows every ID returned here and does not hide NonRealTime parameters.
+     std::vector<AudioUnitParameterID> cachedParameterList;
++    bool parameterListReady = false;
+ 
+     //==============================================================================
+     // According to the docs, this is the maximum size of a MIDIPacketList.
+@@ -2329,12 +2335,8 @@ OSStatus GetParameterList (AudioUnitScope inScope, AudioUnitParameterID* outPara
+         if (forceUseLegacyParamIDs || inScope != kAudioUnitScope_Global)
+             return MusicDeviceBase::GetParameterList (inScope, outParameterList, outNumParameters);
+ 
+-        outNumParameters = (UInt32) juceParameters.size();
+-
+-        if (outParameterList == nullptr)
+-            return noErr;
+-
+-        if (cachedParameterList.empty())
++        // SpectralStrip: list only automatable parameters.
++        if (! parameterListReady)
+         {
+             struct ParamInfo
+             {
+@@ -2346,14 +2348,20 @@ OSStatus GetParameterList (AudioUnitScope inScope, AudioUnitParameterID* outPara
+             vec.reserve (juceParameters.size());
+ 
+             for (const auto* param : juceParameters)
+-                vec.push_back ({ generateAUParameterID (*param), param->getVersionHint() });
++                if (param->isAutomatable())
++                    vec.push_back ({ generateAUParameterID (*param), param->getVersionHint() });
+ 
+             std::sort        (vec.begin(), vec.end(), [] (auto a, auto b) { return a.identifier  < b.identifier; });
+             std::stable_sort (vec.begin(), vec.end(), [] (auto a, auto b) { return a.versionHint < b.versionHint; });
++            cachedParameterList.clear();
+             std::transform   (vec.begin(), vec.end(), std::back_inserter (cachedParameterList), [] (auto x) { return x.identifier; });
++            parameterListReady = true;
+         }
+ 
+-        std::copy (cachedParameterList.begin(), cachedParameterList.end(), outParameterList);
++        outNumParameters = (UInt32) cachedParameterList.size();
++
++        if (outParameterList != nullptr)
++            std::copy (cachedParameterList.begin(), cachedParameterList.end(), outParameterList);
+ 
+         return noErr;
+     }

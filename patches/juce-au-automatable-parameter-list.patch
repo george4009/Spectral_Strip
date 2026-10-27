@@ -1,0 +1,84 @@
+diff --git a/modules/juce_audio_plugin_client/juce_audio_plugin_client_AU_1.mm b/modules/juce_audio_plugin_client/juce_audio_plugin_client_AU_1.mm
+index 579e261..4989f04 100644
+--- a/modules/juce_audio_plugin_client/juce_audio_plugin_client_AU_1.mm
++++ b/modules/juce_audio_plugin_client/juce_audio_plugin_client_AU_1.mm
+@@ -153,6 +153,8 @@ explicit JuceAU (AudioUnit component)
+                            (UInt32) AudioUnitHelpers::getBusCountForWrapper (*juceFilter, true),
+                            (UInt32) AudioUnitHelpers::getBusCountForWrapper (*juceFilter, false))
+     {
++        // SpectralStrip: serialize non-realtime AU property size/copy requests.
++        SetMutex (&parameterDispatchMutex);
+         inParameterChangedCallback = false;
+ 
+        #ifdef JucePlugin_PreferredChannelConfigurations
+@@ -206,6 +208,7 @@ explicit JuceAU (AudioUnit component)
+ 
+     ~JuceAU() override
+     {
++        SetMutex (nullptr);
+         if (bypassParam != nullptr)
+             bypassParam->removeListener (this);
+ 
+@@ -2040,6 +2043,8 @@ void handleAsyncUpdate() override
+ 
+             if ((flags & parameterInfoChangedFlag) != 0)
+             {
++                // SpectralStrip: rebuild the host-visible list before Logic reads it again.
++                owner.parameterListDirty.store (true, std::memory_order_release);
+                 owner.PropertyChanged (kAudioUnitProperty_ParameterList, kAudioUnitScope_Global, 0);
+                 owner.PropertyChanged (kAudioUnitProperty_ParameterInfo, kAudioUnitScope_Global, 0);
+             }
+@@ -2081,7 +2086,12 @@ void handleAsyncUpdate() override
+     Array<const AudioProcessorParameterGroup*> parameterGroups;
+ 
+     // Stores the parameter IDs in the order that they will be reported to the host.
++    // SpectralStrip: list only automatable parameters. Logic's automation menu
++    // shows every ID returned here and does not hide NonRealTime parameters.
++    ausdk::AUMutex parameterDispatchMutex;
+     std::vector<AudioUnitParameterID> cachedParameterList;
++    // Only AU property dispatch accesses the vector, under the SDK instance lock.
++    std::atomic<bool> parameterListDirty { true };
+ 
+     //==============================================================================
+     // According to the docs, this is the maximum size of a MIDIPacketList.
+@@ -2329,12 +2339,12 @@ OSStatus GetParameterList (AudioUnitScope inScope, AudioUnitParameterID* outPara
+         if (forceUseLegacyParamIDs || inScope != kAudioUnitScope_Global)
+             return MusicDeviceBase::GetParameterList (inScope, outParameterList, outNumParameters);
+ 
+-        outNumParameters = (UInt32) juceParameters.size();
+-
+-        if (outParameterList == nullptr)
+-            return noErr;
+-
+-        if (cachedParameterList.empty())
++        // SpectralStrip: list only automatable parameters.
++        // SpectralStrip: invalidate atomically; rebuild only during the size query.
++        // The SDK holds its instance lock across size + copy. Never change the
++        // vector from the message thread or rebuild in the copy call: it could
++        // otherwise outgrow the buffer allocated by the host.
++        if (outParameterList == nullptr && parameterListDirty.exchange (false, std::memory_order_acq_rel))
+         {
+             struct ParamInfo
+             {
+@@ -2346,14 +2356,19 @@ OSStatus GetParameterList (AudioUnitScope inScope, AudioUnitParameterID* outPara
+             vec.reserve (juceParameters.size());
+ 
+             for (const auto* param : juceParameters)
+-                vec.push_back ({ generateAUParameterID (*param), param->getVersionHint() });
++                if (param->isAutomatable())
++                    vec.push_back ({ generateAUParameterID (*param), param->getVersionHint() });
+ 
+             std::sort        (vec.begin(), vec.end(), [] (auto a, auto b) { return a.identifier  < b.identifier; });
+             std::stable_sort (vec.begin(), vec.end(), [] (auto a, auto b) { return a.versionHint < b.versionHint; });
++            cachedParameterList.clear();
+             std::transform   (vec.begin(), vec.end(), std::back_inserter (cachedParameterList), [] (auto x) { return x.identifier; });
+         }
+ 
+-        std::copy (cachedParameterList.begin(), cachedParameterList.end(), outParameterList);
++        outNumParameters = (UInt32) cachedParameterList.size();
++
++        if (outParameterList != nullptr)
++            std::copy (cachedParameterList.begin(), cachedParameterList.end(), outParameterList);
+ 
+         return noErr;
+     }

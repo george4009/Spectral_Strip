@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.4
+
+- Windows build: fixed a test that did not compile with MSVC. The plug-in itself is unchanged.
+
 ## 0.8.3
 
 - Removed the centre mark on the thumbs of bipolar sliders (Tilt, Dispersion, Output).

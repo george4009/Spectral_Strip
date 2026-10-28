@@ -162,7 +162,7 @@ int main(int argc,char* argv[])
         double early=0, echo=0, error=0, expectedEnergy=0;
         constexpr int start=24000, end=30000;
         constexpr int latency=SpectralEngine::defaultSize+10*SpectralEngine::defaultHop;
-        auto burst=[](int t) { return t>=start && t<end ? 0.2f*std::sin(juce::MathConstants<float>::twoPi*1500*t/48000.0f):0.0f; };
+        auto burst=[=](int t) { return t>=start && t<end ? 0.2f*std::sin(juce::MathConstants<float>::twoPi*1500*t/48000.0f):0.0f; };
         for(int i=0;i<48000;++i)
         {
             float in[2]{burst(i),0}, wet[2]{}, dry[2]{};
